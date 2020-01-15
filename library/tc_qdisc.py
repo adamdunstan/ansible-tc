@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from ansible.module_utils.basic import AnsibleModule
 import ansible.module_utils.tc_utils as tc_utils # pylint: disable=E0611,E0401
+import json
 
 
 DOCUMENTATION = '''
@@ -86,26 +87,29 @@ RETURN = '''
 none
 '''
 
-
-DEFAULT_QDISC = "pfifo_fast"
-STR_DEFAULT = "DEFAULT"
+STR_NONE = "NONE"
 STR_MATCH = "MATCH"
 STR_CHANGE = "CHANGE"
 
 
 def _check_current_qdisc(module):
     """ Check what the current qdisc for the specicified device is """
-    qdisc_set = tc_utils.get_current("qdisc", module).split("\n")[-2].split(" ")
 
-    (major, sep, _) = module.params["handle"].partition(":")
+    qdisc_set = tc_utils.get_current("qdisc", module).split()
 
-    if qdisc_set[1] == DEFAULT_QDISC:
-        return STR_DEFAULT
-    elif qdisc_set[1] == module.params["discipline"]:
-        if qdisc_set[2] == "".join([major, sep]):
-            return STR_MATCH
 
-    return STR_CHANGE
+    if qdisc_set[0] == [""]:
+        return STR_NONE
+   
+  
+    if module.params["qdisc"] in qdisc_set:
+        return STR_MATCH
+    
+    if module.params["qdisc"] not in qdisc_set:
+        return STR_NONE
+ 
+
+    return
 
 
 def main():
@@ -114,9 +118,9 @@ def main():
     argument_spec = tc_utils.common_argument_spec()
     argument_spec.update(
         dict(
-            handle=dict(required=False, default="1:0", type="str"),
-            qdisc=dict(required=False, default="root", choices=["root", "ingress"], type="str"),
-            discipline=dict(required=False, default="htb", type="str")
+            handle=dict(required=False, type="str"),
+            qdisc=dict(required=False, choices=["root", "ingress"], type="str"),
+            discipline=dict(required=False, type="str")
         )
     )
 
@@ -127,14 +131,16 @@ def main():
     )
 
     # Validate our input
+
     if not tc_utils.validate_device(module):
         module.fail_json(device=module.params["device"], msg="Device doesn't exist on machine")
 
-    if not tc_utils.validate_handle(module.params["handle"]):
-        module.fail_json(
-            handle=module.params["handle"],
-            msg="Invalid handle syntax, check http://tldp.org/HOWTO/Traffic-Control-HOWTO/components.html#c-handle to see valid syntax"
-            )
+    if module.params["handle"]:
+        if not tc_utils.validate_handle(module.params["handle"]):
+            module.fail_json(
+                handle=module.params["handle"],
+                msg="Invalid handle syntax, check http://tldp.org/HOWTO/Traffic-Control-HOWTO/components.html#c-handle to see valid syntax"
+                )
 
     # Get action based on state
     state = module.params["state"]
@@ -149,6 +155,10 @@ def main():
     # Check if there is anything setup already, and compare that with user input
     current_qdisc = _check_current_qdisc(module)
 
+    
+    if current_qdisc == STR_NONE and module.params["state"] == "absent":
+        module.exit_json(changed=False)
+
     if current_qdisc == STR_MATCH and module.params["state"] == "present":
         module.exit_json(changed=False)
 
@@ -158,8 +168,6 @@ def main():
         if rco is not None and rco != 0:
             module.fail_json(msg=err, rc=rco)
 
-    if current_qdisc == STR_DEFAULT and module.params["state"] == "absent":
-        module.exit_json(changed=False)
 
     cmd = tc_utils.build_qdisc_command(module, action)
     (rco, out, err) = module.run_command(cmd)

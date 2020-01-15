@@ -44,8 +44,11 @@ def build_qdisc_command(module, action):
     if action == "del":
         return cmd
 
-    cmd.extend(["handle", module.params["handle"]])
-    cmd.append(module.params["discipline"])
+# Ingress is special type
+    if not module.params["qdisc"] == "ingress":
+
+        cmd.extend(["handle", module.params["handle"]])
+        cmd.append(module.params["discipline"])
 
     return cmd
 
